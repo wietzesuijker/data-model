@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 2025-09-28
+
+### Added
+- Group normalization utilities that map requested measurement and CRS groups to canonical GeoZarr paths and raise actionable errors when inputs are missing from the source datatree.
+- CLI defaults that expose the canonical reflectance groups for Sentinel-2 datasets, ensuring the convert command matches downstream tiling expectations out of the box.
+
+### Changed
+- GeoZarr conversion now normalizes, de-duplicates, and validates requested groups, reports missing CRS sections, and emits clearer logging while writing datasets and overviews.
+- CRS augmentation reuses inferred reference metadata whenever available and skips augmentation gracefully when no CRS can be detected.
+- Conversion tests cover the new normalization flow, CRS inference, and failure messages to guard against regressions.
+
 ## [0.1.0] - 2025-01-25
 
 ### Added
