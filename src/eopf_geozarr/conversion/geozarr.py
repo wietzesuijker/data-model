@@ -27,96 +27,19 @@ from zarr.storage import StoreLike
 from zarr.storage._common import make_store_path
 
 from . import fs_utils, utils
+from .groups import DEFAULT_REFLECTANCE_GROUPS as _DEFAULT_REFLECTANCE_GROUPS
+from .groups import list_available_groups as _list_available_groups_public
+from .groups import normalize_crs_groups as _normalize_crs_groups_public
+from .groups import normalize_measurement_groups as _normalize_measurement_groups_public
 
-DEFAULT_REFLECTANCE_GROUPS: List[str] = [
-    "/measurements/reflectance/r10m",
-    "/measurements/reflectance/r20m",
-    "/measurements/reflectance/r60m",
-]
+DEFAULT_REFLECTANCE_GROUPS = _DEFAULT_REFLECTANCE_GROUPS
+normalize_measurement_groups = _normalize_measurement_groups_public
+normalize_crs_groups = _normalize_crs_groups_public
+list_available_groups = _list_available_groups_public
 
-
-def _normalized_datatree_path(raw_path: str | None) -> str:
-    if not raw_path:
-        return ""
-    cleaned = "".join(part for part in raw_path.strip().replace("\\", "/") if part)
-    stripped = "/".join(segment for segment in cleaned.split("/") if segment)
-    return f"/{stripped}" if stripped else ""
-
-
-def _list_available_groups(dt: xr.DataTree) -> List[str]:
-    return sorted(
-        {node.path for node in dt.subtree if node.path and node.ds is not None}
-    )
-
-
-def _normalize_and_validate_groups(
-    dt: xr.DataTree, groups: List[str] | None
-) -> List[str]:
-    requested = groups or DEFAULT_REFLECTANCE_GROUPS
-    normalized: List[str] = []
-    missing: List[str] = []
-    seen: set[str] = set()
-
-    for raw_path in requested:
-        normalized_path = _normalized_datatree_path(raw_path)
-        if not normalized_path:
-            continue
-        if normalized_path.startswith("/measurements/"):
-            segments = normalized_path.strip("/").split("/")
-            if len(segments) >= 2 and segments[1] != "reflectance":
-                segments.insert(1, "reflectance")
-                normalized_path = "/" + "/".join(segments)
-        if normalized_path in seen:
-            continue
-        seen.add(normalized_path)
-        try:
-            dt[normalized_path.lstrip("/")]
-        except KeyError:
-            missing.append(normalized_path)
-        else:
-            normalized.append(normalized_path)
-
-    if missing:
-        available = _list_available_groups(dt)
-        available_display = ", ".join(available) if available else "<none>"
-        raise ValueError(
-            "Missing required measurement groups: "
-            + ", ".join(missing)
-            + ". Available groups: "
-            + available_display
-        )
-
-    if not normalized:
-        raise ValueError("No measurement groups found; verify the input DataTree.")
-
-    return normalized
-
-
-def _normalize_crs_groups(
-    dt: xr.DataTree,
-    groups: List[str] | None,
-) -> Tuple[List[str], List[Tuple[str, str]]]:
-    if not groups:
-        return [], []
-
-    normalized: List[str] = []
-    missing: List[Tuple[str, str]] = []
-    seen: set[str] = set()
-
-    for raw_path in groups:
-        normalized_path = _normalized_datatree_path(raw_path).rstrip("/")
-        if not normalized_path:
-            continue
-        try:
-            dt[normalized_path.lstrip("/")]
-        except KeyError:
-            missing.append((normalized_path, raw_path))
-        else:
-            if normalized_path not in seen:
-                normalized.append(normalized_path)
-                seen.add(normalized_path)
-
-    return normalized, missing
+# Backwards compatibility for legacy private helper imports.
+_normalize_and_validate_groups = _normalize_measurement_groups_public
+_normalize_crs_groups = _normalize_crs_groups_public
 
 
 def create_geozarr_dataset(
@@ -161,11 +84,11 @@ def create_geozarr_dataset(
     dt = dt_input.copy()
     compressor = BloscCodec(cname="zstd", clevel=3, shuffle="shuffle", blocksize=0)
 
-    normalized_groups = _normalize_and_validate_groups(dt, groups)
-    normalized_crs_groups, missing_crs = _normalize_crs_groups(dt, crs_groups)
+    normalized_groups = normalize_measurement_groups(dt, groups)
+    normalized_crs_groups, missing_crs = normalize_crs_groups(dt, crs_groups)
 
     if missing_crs:
-        available = _list_available_groups(dt)
+        available = list_available_groups(dt)
         available_display = ", ".join(available) if available else "<none>"
         for normalized_path, raw_path in missing_crs:
             print(

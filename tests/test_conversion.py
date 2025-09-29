@@ -19,10 +19,12 @@ from eopf_geozarr.conversion import (
     validate_existing_band_data,
 )
 from eopf_geozarr.conversion.geozarr import (
-    _normalize_and_validate_groups,
-    _normalize_crs_groups,
     create_overview_dataset_all_vars,
     prepare_dataset_with_crs_info,
+)
+from eopf_geozarr.conversion.groups import (
+    normalize_crs_groups,
+    normalize_measurement_groups,
 )
 
 
@@ -421,8 +423,8 @@ class TestGroupNormalization:
             "/measurements/reflectance/r60m",
         ]
 
-    def test_normalization_inserts_reflectance_segment(self) -> None:
-        """Normalization should coerce /measurements/rXXm to reflectance paths."""
+    def test_normalization_requires_explicit_paths(self) -> None:
+        """Normalization should not attempt to infer missing path segments."""
 
         dataset = xr.Dataset(
             {
@@ -446,20 +448,18 @@ class TestGroupNormalization:
         ):
             dt[path] = dataset
 
-        normalized = _normalize_and_validate_groups(
-            dt,
-            [
-                "/measurements/r10m",
-                "measurements/reflectance/r20m",
-                "measurements/r60m",
-            ],
-        )
+        with pytest.raises(ValueError) as excinfo:
+            normalize_measurement_groups(
+                dt,
+                [
+                    "/measurements/r10m",
+                    "measurements/reflectance/r20m",
+                    "measurements/r60m",
+                ],
+            )
 
-        assert normalized == [
-            "/measurements/reflectance/r10m",
-            "/measurements/reflectance/r20m",
-            "/measurements/reflectance/r60m",
-        ]
+        message = str(excinfo.value)
+        assert "/measurements/r10m" in message
 
     def test_missing_group_raises_value_error(self, tmp_path: Path) -> None:
         """Missing core reflectance groups should raise a clear validation error."""
@@ -561,7 +561,7 @@ class TestGroupNormalization:
         dt = xr.DataTree()
         dt["conditions/geometry"] = dataset
 
-        normalized, missing = _normalize_crs_groups(
+        normalized, missing = normalize_crs_groups(
             dt,
             [
                 "/conditions/geometry",

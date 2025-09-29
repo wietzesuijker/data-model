@@ -11,13 +11,18 @@ from .fs_utils import (
     write_s3_json_metadata,
 )
 from .geozarr import (
-    DEFAULT_REFLECTANCE_GROUPS,
     async_consolidate_metadata,
     calculate_overview_levels,
     consolidate_metadata,
     create_geozarr_dataset,
     iterative_copy,
     setup_datatree_metadata_geozarr_spec_compliant,
+)
+from .groups import (
+    DEFAULT_REFLECTANCE_GROUPS,
+    list_available_groups,
+    normalize_crs_groups,
+    normalize_measurement_groups,
 )
 from .utils import (
     calculate_aligned_chunk_size,
@@ -34,6 +39,9 @@ __all__ = [
     "async_consolidate_metadata",
     "calculate_overview_levels",
     "DEFAULT_REFLECTANCE_GROUPS",
+    "normalize_measurement_groups",
+    "normalize_crs_groups",
+    "list_available_groups",
     "downsample_2d_array",
     "calculate_aligned_chunk_size",
     "is_grid_mapping_variable",
