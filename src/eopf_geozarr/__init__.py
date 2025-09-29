@@ -3,6 +3,7 @@
 from importlib.metadata import version
 
 from .conversion import (
+    DEFAULT_REFLECTANCE_GROUPS,
     async_consolidate_metadata,
     calculate_aligned_chunk_size,
     consolidate_metadata,
@@ -24,6 +25,7 @@ __all__ = [
     "consolidate_metadata",
     "async_consolidate_metadata",
     "downsample_2d_array",
+    "DEFAULT_REFLECTANCE_GROUPS",
     "calculate_aligned_chunk_size",
     "is_grid_mapping_variable",
     "validate_existing_band_data",

@@ -28,6 +28,96 @@ from zarr.storage._common import make_store_path
 
 from . import fs_utils, utils
 
+DEFAULT_REFLECTANCE_GROUPS: List[str] = [
+    "/measurements/reflectance/r10m",
+    "/measurements/reflectance/r20m",
+    "/measurements/reflectance/r60m",
+]
+
+
+def _normalized_datatree_path(raw_path: str | None) -> str:
+    if not raw_path:
+        return ""
+    cleaned = "".join(part for part in raw_path.strip().replace("\\", "/") if part)
+    stripped = "/".join(segment for segment in cleaned.split("/") if segment)
+    return f"/{stripped}" if stripped else ""
+
+
+def _list_available_groups(dt: xr.DataTree) -> List[str]:
+    return sorted(
+        {node.path for node in dt.subtree if node.path and node.ds is not None}
+    )
+
+
+def _normalize_and_validate_groups(
+    dt: xr.DataTree, groups: List[str] | None
+) -> List[str]:
+    requested = groups or DEFAULT_REFLECTANCE_GROUPS
+    normalized: List[str] = []
+    missing: List[str] = []
+    seen: set[str] = set()
+
+    for raw_path in requested:
+        normalized_path = _normalized_datatree_path(raw_path)
+        if not normalized_path:
+            continue
+        if normalized_path.startswith("/measurements/"):
+            segments = normalized_path.strip("/").split("/")
+            if len(segments) >= 2 and segments[1] != "reflectance":
+                segments.insert(1, "reflectance")
+                normalized_path = "/" + "/".join(segments)
+        if normalized_path in seen:
+            continue
+        seen.add(normalized_path)
+        try:
+            dt[normalized_path.lstrip("/")]
+        except KeyError:
+            missing.append(normalized_path)
+        else:
+            normalized.append(normalized_path)
+
+    if missing:
+        available = _list_available_groups(dt)
+        available_display = ", ".join(available) if available else "<none>"
+        raise ValueError(
+            "Missing required measurement groups: "
+            + ", ".join(missing)
+            + ". Available groups: "
+            + available_display
+        )
+
+    if not normalized:
+        raise ValueError("No measurement groups found; verify the input DataTree.")
+
+    return normalized
+
+
+def _normalize_crs_groups(
+    dt: xr.DataTree,
+    groups: List[str] | None,
+) -> Tuple[List[str], List[Tuple[str, str]]]:
+    if not groups:
+        return [], []
+
+    normalized: List[str] = []
+    missing: List[Tuple[str, str]] = []
+    seen: set[str] = set()
+
+    for raw_path in groups:
+        normalized_path = _normalized_datatree_path(raw_path).rstrip("/")
+        if not normalized_path:
+            continue
+        try:
+            dt[normalized_path.lstrip("/")]
+        except KeyError:
+            missing.append((normalized_path, raw_path))
+        else:
+            if normalized_path not in seen:
+                normalized.append(normalized_path)
+                seen.add(normalized_path)
+
+    return normalized, missing
+
 
 def create_geozarr_dataset(
     dt_input: xr.DataTree,
@@ -71,8 +161,26 @@ def create_geozarr_dataset(
     dt = dt_input.copy()
     compressor = BloscCodec(cname="zstd", clevel=3, shuffle="shuffle", blocksize=0)
 
+    normalized_groups = _normalize_and_validate_groups(dt, groups)
+    normalized_crs_groups, missing_crs = _normalize_crs_groups(dt, crs_groups)
+
+    if missing_crs:
+        available = _list_available_groups(dt)
+        available_display = ", ".join(available) if available else "<none>"
+        for normalized_path, raw_path in missing_crs:
+            print(
+                "⚠️ CRS group '"
+                + str(raw_path)
+                + "' not found in DataTree (normalized to '"
+                + normalized_path
+                + "'). Available groups: "
+                + available_display
+            )
+
     # Get the measurements datasets prepared for GeoZarr compliance
-    geozarr_groups = setup_datatree_metadata_geozarr_spec_compliant(dt, groups)
+    geozarr_groups = setup_datatree_metadata_geozarr_spec_compliant(
+        dt, normalized_groups
+    )
 
     # Create the GeoZarr compliant store through iterative processing
     dt_geozarr = iterative_copy(
@@ -84,7 +192,7 @@ def create_geozarr_dataset(
         min_dimension,
         tile_width,
         max_retries,
-        crs_groups,
+        normalized_crs_groups,
     )
 
     # Consolidate metadata at the root level AFTER all groups are written
@@ -120,12 +228,20 @@ def setup_datatree_metadata_geozarr_spec_compliant(
     geozarr_groups = {}
     grid_mapping_var_name = "spatial_ref"
 
-    for key in groups:
-        if not dt[key].data_vars:
+    for raw_key in groups:
+        current_path = raw_key if raw_key.startswith("/") else f"/{raw_key}"
+        datatree_key = current_path.lstrip("/")
+
+        try:
+            node = dt[datatree_key]
+        except KeyError:
             continue
 
-        print(f"Processing group for GeoZarr compliance: {key}")
-        ds = dt[key].to_dataset().copy()
+        if not node.data_vars:
+            continue
+
+        print(f"Processing group for GeoZarr compliance: {current_path}")
+        ds = node.to_dataset().copy()
 
         # Process all bands in the group
         for band in ds.data_vars:
@@ -149,7 +265,7 @@ def setup_datatree_metadata_geozarr_spec_compliant(
         # Set up spatial_ref variable with GeoZarr required attributes
         _setup_grid_mapping(ds, grid_mapping_var_name)
 
-        geozarr_groups[key] = ds
+        geozarr_groups[current_path] = ds
 
     return geozarr_groups
 

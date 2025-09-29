@@ -1,5 +1,7 @@
 """Tests for the conversion module."""
 
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -7,6 +9,7 @@ import pytest
 import rioxarray  # noqa: F401  # Import to enable .rio accessor
 import xarray as xr
 
+from eopf_geozarr import DEFAULT_REFLECTANCE_GROUPS, create_geozarr_dataset
 from eopf_geozarr.conversion import (
     calculate_aligned_chunk_size,
     calculate_overview_levels,
@@ -16,6 +19,8 @@ from eopf_geozarr.conversion import (
     validate_existing_band_data,
 )
 from eopf_geozarr.conversion.geozarr import (
+    _normalize_and_validate_groups,
+    _normalize_crs_groups,
     create_overview_dataset_all_vars,
     prepare_dataset_with_crs_info,
 )
@@ -403,6 +408,98 @@ class TestIssue12Fix:
         assert detector_attrs["standard_name"] == "detector"
         assert detector_attrs["long_name"] == "detector identifier"
 
+
+class TestGroupNormalization:
+    """Tests for group normalization and validation logic."""
+
+    def test_default_reflectance_groups(self) -> None:
+        """Ensure default reflectance groups stay aligned with expected paths."""
+
+        assert DEFAULT_REFLECTANCE_GROUPS == [
+            "/measurements/reflectance/r10m",
+            "/measurements/reflectance/r20m",
+            "/measurements/reflectance/r60m",
+        ]
+
+    def test_normalization_inserts_reflectance_segment(self) -> None:
+        """Normalization should coerce /measurements/rXXm to reflectance paths."""
+
+        dataset = xr.Dataset(
+            {
+                "B04": (
+                    ["y", "x"],
+                    np.ones((2, 2)),
+                    {"proj:epsg": 32633},
+                )
+            },
+            coords={
+                "x": ("x", np.arange(2)),
+                "y": ("y", np.arange(2)),
+            },
+        )
+
+        dt = xr.DataTree()
+        for path in (
+            "measurements/reflectance/r10m",
+            "measurements/reflectance/r20m",
+            "measurements/reflectance/r60m",
+        ):
+            dt[path] = dataset
+
+        normalized = _normalize_and_validate_groups(
+            dt,
+            [
+                "/measurements/r10m",
+                "measurements/reflectance/r20m",
+                "measurements/r60m",
+            ],
+        )
+
+        assert normalized == [
+            "/measurements/reflectance/r10m",
+            "/measurements/reflectance/r20m",
+            "/measurements/reflectance/r60m",
+        ]
+
+    def test_missing_group_raises_value_error(self, tmp_path: Path) -> None:
+        """Missing core reflectance groups should raise a clear validation error."""
+
+        dataset = xr.Dataset(
+            {
+                "B04": (
+                    ["y", "x"],
+                    np.ones((2, 2)),
+                    {"proj:epsg": 32633},
+                )
+            },
+            coords={
+                "x": ("x", np.arange(2)),
+                "y": ("y", np.arange(2)),
+            },
+        )
+
+        dt = xr.DataTree()
+        for path in (
+            "measurements/reflectance/r20m",
+            "measurements/reflectance/r60m",
+        ):
+            dt[path] = dataset
+
+        with pytest.raises(ValueError) as excinfo:
+            create_geozarr_dataset(
+                dt,
+                [
+                    "/measurements/r10m",
+                    "/measurements/r20m",
+                    "/measurements/r60m",
+                ],
+                str(tmp_path / "out.zarr"),
+            )
+
+        message = str(excinfo.value)
+        assert "r10m" in message
+        assert "Available groups" in message
+
     def test_prepare_dataset_with_crs_info_data_variable_attributes(self) -> None:
         """Test that data variable attributes are properly set."""
         # Create a geometry dataset
@@ -448,6 +545,83 @@ class TestIssue12Fix:
                 ):
                     assert "grid_mapping" in var_attrs
                     assert var_attrs["grid_mapping"] == "spatial_ref"
+
+    def test_normalize_crs_groups_reports_missing_and_deduplicates(self) -> None:
+        """CRS group normalization should deduplicate entries and flag missing paths."""
+
+        dataset = xr.Dataset(
+            {
+                "mean_sun_angles": ("angle", np.array([45.0, 30.0])),
+            },
+            coords={
+                "angle": ("angle", ["zenith", "azimuth"]),
+            },
+        )
+
+        dt = xr.DataTree()
+        dt["conditions/geometry"] = dataset
+
+        normalized, missing = _normalize_crs_groups(
+            dt,
+            [
+                "/conditions/geometry",
+                "conditions/geometry/",  # duplicate path variant
+                "/conditions/viewing",
+                "/conditions/viewing",  # duplicate missing entry
+            ],
+        )
+
+        assert normalized == ["/conditions/geometry"]
+        assert missing == [
+            ("/conditions/viewing", "/conditions/viewing"),
+            ("/conditions/viewing", "/conditions/viewing"),
+        ]
+
+    def test_create_dataset_warns_about_missing_crs_groups(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """create_geozarr_dataset should warn when requested CRS groups are absent."""
+
+        measurement_ds = xr.Dataset(
+            {
+                "B04": ("y", np.ones(2)),
+            },
+            coords={
+                "y": ("y", np.arange(2)),
+            },
+        )
+
+        dt = xr.DataTree()
+        for group in DEFAULT_REFLECTANCE_GROUPS:
+            dt[group.lstrip("/")] = measurement_ds
+
+        with (
+            patch(
+                "eopf_geozarr.conversion.geozarr.setup_datatree_metadata_geozarr_spec_compliant"
+            ) as mock_setup,
+            patch("eopf_geozarr.conversion.geozarr.iterative_copy") as mock_iterative,
+            patch(
+                "eopf_geozarr.conversion.geozarr.fs_utils.open_zarr_group"
+            ) as mock_open,
+            patch("eopf_geozarr.conversion.geozarr.consolidate_metadata"),
+        ):
+            mock_setup.return_value = {
+                group: measurement_ds for group in DEFAULT_REFLECTANCE_GROUPS
+            }
+            mock_iterative.return_value = xr.DataTree()
+            mock_open.return_value = SimpleNamespace(store=object())
+
+            create_geozarr_dataset(
+                dt,
+                list(DEFAULT_REFLECTANCE_GROUPS),
+                str(tmp_path / "out.zarr"),
+                crs_groups=["/conditions/viewing"],
+            )
+
+        captured = capsys.readouterr()
+        assert "not found in DataTree" in captured.out
 
     def test_prepare_dataset_with_crs_info_crs_inference(self) -> None:
         """Test CRS inference from measurement groups."""

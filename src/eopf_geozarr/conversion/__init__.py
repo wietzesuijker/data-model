@@ -11,6 +11,7 @@ from .fs_utils import (
     write_s3_json_metadata,
 )
 from .geozarr import (
+    DEFAULT_REFLECTANCE_GROUPS,
     async_consolidate_metadata,
     calculate_overview_levels,
     consolidate_metadata,
@@ -32,6 +33,7 @@ __all__ = [
     "consolidate_metadata",
     "async_consolidate_metadata",
     "calculate_overview_levels",
+    "DEFAULT_REFLECTANCE_GROUPS",
     "downsample_2d_array",
     "calculate_aligned_chunk_size",
     "is_grid_mapping_variable",

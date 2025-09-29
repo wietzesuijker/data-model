@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 import xarray as xr
 
-from . import create_geozarr_dataset
+from . import DEFAULT_REFLECTANCE_GROUPS, create_geozarr_dataset
 from .conversion.fs_utils import (
     get_s3_credentials_info,
     get_storage_options,
@@ -1054,8 +1054,11 @@ def create_parser() -> argparse.ArgumentParser:
         "--groups",
         type=str,
         nargs="+",
-        default=["/measurements/r10m", "/measurements/r20m", "/measurements/r60m"],
-        help="Groups to convert (default: Sentinel-2 resolution groups)",
+        default=DEFAULT_REFLECTANCE_GROUPS.copy(),
+        help=(
+            "Groups to convert (default: Sentinel-2 reflectance resolution groups, "
+            "e.g. /measurements/reflectance/r10m)"
+        ),
     )
     convert_parser.add_argument(
         "--spatial-chunk",
